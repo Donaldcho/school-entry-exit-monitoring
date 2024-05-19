@@ -1,0 +1,10 @@
+[default]
+confidence_threshold = 0.5
+max_cosine_distance = 0.4
+max_reconnect_attempts = 5
+max_age = 30
+n_init = 3
+rabbitmq_host = "localhost"
+rabbitmq_port = 5672
+rabbitmq_queue = "yolo_triggers"
+camera_index = 1
