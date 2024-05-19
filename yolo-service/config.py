@@ -12,5 +12,5 @@ CONFIG = {
     "rabbitmq_host": os.getenv('RABBITMQ_HOST', 'localhost'),
     "rabbitmq_port": int(os.getenv('RABBITMQ_PORT', 5672)),
     "rabbitmq_queue": os.getenv('RABBITMQ_QUEUE', 'yolo_triggers'),
-    "camera_index": int(os.getenv('CAMERA_INDEX', 1))
+    "camera_index": int(os.getenv('CAMERA_INDEX', 0))
 }
