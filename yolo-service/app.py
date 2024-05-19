@@ -19,8 +19,6 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'your_secret_key')
-
 # Logging configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,8 +38,10 @@ def token_required(f):
         if not token:
             return jsonify({'message': 'Token is missing!'}), 403
         try:
-            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        except:
+            data = jwt.decode(token, CONFIG["SECRET_KEY"], algorithms=["HS256"])
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token has expired!'}), 403
+        except jwt.InvalidTokenError:
             return jsonify({'message': 'Token is invalid!'}), 403
         return f(*args, **kwargs)
     return decorator
@@ -127,7 +127,7 @@ def video_feed():
 def login():
     auth = request.authorization
     if auth and auth.password == 'password':
-        token = jwt.encode({'user': auth.username}, SECRET_KEY, algorithm="HS256")
+        token = jwt.encode({'user': auth.username}, CONFIG["SECRET_KEY"], algorithm="HS256")
         return jsonify({'token': token})
     return jsonify({'message': 'Could not verify'}), 401
 
