@@ -5,7 +5,7 @@ import json
 import logging
 import torch
 import pika
-from flask import Flask, Response
+from flask import Flask, Response, jsonify
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from dotenv import load_dotenv
 from config import CONFIG
@@ -39,59 +39,70 @@ deepsort_tracker = DeepSort(
     max_cosine_distance=CONFIG["max_cosine_distance"]
 )
 
+# Global variables for tracking status
+start_time = time.time()
+last_detection_time = None
+
 def generate_frames():
     """Generates video frames with object detection and tracking."""
+    global last_detection_time
     cap, connection, channel = initialize_resources()
     tracked_ids = set()
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            logger.warning("Camera disconnected. Reconnecting...")
-            cap = handle_camera_disconnection(cap)
-            continue
-
-        # YOLOv5 inference
-        results = model(frame)
-
-        # Get bounding boxes and confidences
-        detections = []
-        crops = []
-        for det in results.xyxy[0].cpu().numpy():
-            x1, y1, x2, y2, conf, cls = det
-            if int(cls) == 0 and conf > CONFIG["confidence_threshold"]:
-                x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
-                width, height = x2 - x1, y2 - y1
-                detections.append(([x1, y1, width, height], conf, 'person'))
-                crops.append(frame[y1:y2, x1:x2])
-
-        # Generate embeddings for detections
-        embeddings = generate_embeddings(crops, feature_extractor) if crops else []
-
-        # DeepSORT tracking with embeddings
-        tracks = deepsort_tracker.update_tracks(detections, embeds=embeddings, frame=frame)
-
-        # Visualize and send messages
-        for track in tracks:
-            if not track.is_confirmed() or track.time_since_update > 1:
+        try:
+            ret, frame = cap.read()
+            if not ret:
+                logger.warning("Camera disconnected. Reconnecting...")
+                cap = handle_camera_disconnection(cap)
                 continue
-            bbox = track.to_tlbr()
-            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 255, 0), 2)
-            cv2.putText(frame, str(track.track_id), (int(bbox[0]), int(bbox[1] - 10)), 0, 0.75, (0, 255, 0), 2)
 
-            if track.time_since_update == 0 and track.is_confirmed() and track.track_id not in tracked_ids:
-                message = {
-                    'track_id': track.track_id,
-                    'bbox': [int(x) for x in bbox],
-                    'timestamp': time.time(),
-                }
-                channel = publish_message(channel, message)
-                tracked_ids.add(track.track_id)
+            # YOLOv5 inference
+            results = model(frame)
 
-        # Encode and yield frame
-        _, buffer = cv2.imencode('.jpg', frame)
-        frame = buffer.tobytes()
-        yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            # Get bounding boxes and confidences
+            detections = []
+            crops = []
+            for det in results.xyxy[0].cpu().numpy():
+                x1, y1, x2, y2, conf, cls = det
+                if int(cls) == 0 and conf > CONFIG["confidence_threshold"]:
+                    x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                    width, height = x2 - x1, y2 - y1
+                    detections.append(([x1, y1, width, height], conf, 'person'))
+                    crops.append(frame[y1:y2, x1:x2])
+
+            # Generate embeddings for detections
+            embeddings = generate_embeddings(crops, feature_extractor) if crops else []
+
+            # DeepSORT tracking with embeddings
+            tracks = deepsort_tracker.update_tracks(detections, embeds=embeddings, frame=frame)
+
+            # Visualize and send messages
+            for track in tracks:
+                if not track.is_confirmed() or track.time_since_update > 1:
+                    continue
+                bbox = track.to_tlbr()
+                cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 255, 0), 2)
+                cv2.putText(frame, str(track.track_id), (int(bbox[0]), int(bbox[1] - 10)), 0, 0.75, (0, 255, 0), 2)
+
+                if track.time_since_update == 0 and track.is_confirmed() and track.track_id not in tracked_ids:
+                    message = {
+                        'track_id': track.track_id,
+                        'bbox': [int(x) for x in bbox],
+                        'timestamp': time.time(),
+                    }
+                    channel = publish_message(channel, message)
+                    tracked_ids.add(track.track_id)
+
+                    # Update last detection time
+                    last_detection_time = time.time()
+
+            # Encode and yield frame
+            _, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        except Exception as e:
+            logger.error(f"Error processing frame: {e}")
 
     release_resources(cap, connection)
 
@@ -99,8 +110,19 @@ def generate_frames():
 def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route('/status')
+def status():
+    uptime = time.time() - start_time
+    return jsonify({
+        "status": "running",
+        "uptime": f"{uptime//3600:.0f}h {(uptime%3600)//60:.0f}m",
+        "last_detection": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(last_detection_time)) if last_detection_time else "No detections yet"
+    })
+
 if __name__ == '__main__':
     try:
         app.run(host='0.0.0.0', port=5000, debug=True)
     except KeyboardInterrupt:
         logger.info("Server stopped by user.")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
