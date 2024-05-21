@@ -1,6 +1,3 @@
-Sure, here is the comprehensive `README.md` file in markdown format suitable for GitHub:
-
-
 # YOLO Microservice
 
 ## Overview
