@@ -1,6 +1,6 @@
 Sure, here is the comprehensive `README.md` file in markdown format suitable for GitHub:
 
-```markdown
+
 # YOLO Microservice
 
 ## Overview
@@ -9,7 +9,7 @@ The YOLO Microservice is a component of a school entry and exit monitoring syste
 
 ## Directory Structure
 
-```
+
 yolo-service/
 │
 ├── app.py
