@@ -5,6 +5,7 @@ import json
 import logging
 import pika
 import asyncio
+import traceback  # Ensure traceback is imported
 from aiohttp import web
 from aiohttp import WSMsgType
 from dotenv import load_dotenv
@@ -155,18 +156,31 @@ async def generate_frames():
             detections = []
             crops = []
             for det in results.xyxy[0].cpu().numpy():
-                x1, y1, x2, y2, conf, cls = det
+                x1, y1, x2, y2, conf, cls = list(map(int, det[:4])) + [det[4], det[5]]
+                logger.debug(f"Detections: x1={x1}, y1={y1}, x2={x2}, y2={y2}, conf={conf}, cls={cls}")
                 if int(cls) == 0 and conf > confidence_threshold:
-                    x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
                     width, height = x2 - x1, y2 - y1
                     detections.append(([x1, y1, width, height], conf, 'person'))
                     crops.append(frame[y1:y2, x1:x2])
 
             # Generate embeddings for detections
             embeddings = generate_embeddings(crops, feature_extractor) if crops else []
+            logger.debug(f"Generated {len(embeddings)} embeddings")
 
             # DeepSORT tracking with embeddings
             tracks = deepsort_tracker.update_tracks(detections, embeds=embeddings, frame=frame)
+
+            # Map track IDs to their corresponding embeddings
+            track_id_to_embedding = {}
+            for i, track in enumerate(tracks):
+                try:
+                    track_id_int = int(track.track_id)  # Convert track_id to integer
+                    if i < len(embeddings):
+                        track_id_to_embedding[track_id_int] = embeddings[i].tolist()
+                    else:
+                        track_id_to_embedding[track_id_int] = []  # Empty embedding if no corresponding embedding
+                except ValueError:
+                    logger.error(f"Non-integer track ID: {track.track_id}")
 
             # Visualize and send messages
             for track in tracks:
@@ -177,15 +191,23 @@ async def generate_frames():
                 cv2.putText(frame, str(track.track_id), (int(bbox[0]), int(bbox[1] - 10)), 0, 0.75, (0, 255, 0), 2)
 
                 if track.time_since_update == 0 and track.is_confirmed() and track.track_id not in tracked_ids:
-                    message = {
-                        'track_id': track.track_id,
-                        'bbox': [int(x) for x in bbox],
-                        'timestamp': time.time(),
-                    }
-                    publish_message(channel, message)
-                    for ws in websockets:
-                        await ws.send_json(message)
-                    tracked_ids.add(track.track_id)
+                    try:
+                        track_id_int = int(track.track_id)  # Convert track_id to integer
+                        embedding = track_id_to_embedding.get(track_id_int, [])
+                        message = {
+                            'track_id': track.track_id,
+                            'bbox': [int(x) for x in bbox],
+                            'embedding': embedding,
+                            'timestamp': time.time(),
+                        }
+                        logger.debug(f"Publishing message: {message}")
+                        publish_message(channel, message)
+                        for ws in websockets:
+                            await ws.send_json(message)
+                        tracked_ids.add(track.track_id)
+                    except Exception as e:
+                        logger.error(f"Error sending message: {e}")
+                        logger.error(traceback.format_exc())
 
             # Encode and yield frame
             _, buffer = cv2.imencode('.jpg', frame)
@@ -195,6 +217,7 @@ async def generate_frames():
 
         except Exception as e:
             logger.error(f"Error processing frame: {e}")
+            logger.error(traceback.format_exc())
             break
 
     cap.release()
