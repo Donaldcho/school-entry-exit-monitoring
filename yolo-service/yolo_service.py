@@ -5,7 +5,7 @@ import json
 import logging
 import pika
 import asyncio
-import traceback  # Ensure traceback is imported
+import traceback
 from aiohttp import web
 from aiohttp import WSMsgType
 from dotenv import load_dotenv
@@ -63,7 +63,7 @@ except AttributeError as e:
 
 # RabbitMQ connection setup with retry mechanism
 def create_rabbitmq_channel():
-    max_retries = 5
+    max_retries = CONFIG.max_reconnect_attempts
     retries = 0
     while retries < max_retries:
         try:
@@ -77,8 +77,10 @@ def create_rabbitmq_channel():
             )
             connection = pika.BlockingConnection(parameters)
             channel = connection.channel()
+            # Declare the queues
             channel.queue_declare(queue=CONFIG.rabbitmq_queue, durable=True)
-            logger.info("RabbitMQ connection established and queue declared")
+            channel.queue_declare(queue=CONFIG.face_recognition_queue, durable=True)
+            logger.info("RabbitMQ connection established and queues declared")
             return connection, channel
         except pika.exceptions.ProbableAuthenticationError as e:
             logger.error(f"RabbitMQ authentication error: {e}")
@@ -110,15 +112,15 @@ if not connection or not channel:
     logger.error("Failed to establish RabbitMQ connection. Exiting...")
     exit(1)
 
-def publish_message(channel, message):
+def publish_message(channel, message, queue):
     try:
         channel.basic_publish(
             exchange='',
-            routing_key=CONFIG.rabbitmq_queue,
+            routing_key=queue,
             body=json.dumps(message),
             properties=pika.BasicProperties(delivery_mode=2)  # make message persistent
         )
-        logger.info(f"Message published to RabbitMQ: {message}")
+        logger.info(f"Message published to RabbitMQ queue '{queue}': {message}")
     except pika.exceptions.ChannelClosedByBroker as e:
         logger.error(f"RabbitMQ channel closed by broker: {e}")
         reconnect_rabbitmq()
@@ -194,14 +196,17 @@ async def generate_frames():
                     try:
                         track_id_int = int(track.track_id)  # Convert track_id to integer
                         embedding = track_id_to_embedding.get(track_id_int, [])
+                        _, buffer = cv2.imencode('.jpg', frame)
+                        image_data = buffer.tobytes()
                         message = {
                             'track_id': track.track_id,
                             'bbox': [int(x) for x in bbox],
                             'embedding': embedding,
                             'timestamp': time.time(),
+                            'image_data': image_data.hex()  # Send image data as hex string
                         }
                         logger.debug(f"Publishing message: {message}")
-                        publish_message(channel, message)
+                        publish_message(channel, message, CONFIG.face_recognition_queue)
                         for ws in websockets:
                             await ws.send_json(message)
                         tracked_ids.add(track.track_id)

@@ -7,4 +7,5 @@ n_init = 3
 rabbitmq_host = "localhost"
 rabbitmq_port = 5672
 rabbitmq_queue = "yolo_triggers"
+face_recognition_queue = "face_recognition_queue"
 camera_index = 1
