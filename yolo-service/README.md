@@ -389,4 +389,3 @@ if __name__ == '__main__':
 - **Service Crashes**: Check the logs for detailed error messages and stack traces to diagnose issues.
 ```
 
-You can place this content in a `README.md` file in your GitHub repository for the YOLO service. This file provides an overview, features, components, configuration details, service workflow, and instructions on how to run and troubleshoot the service.
