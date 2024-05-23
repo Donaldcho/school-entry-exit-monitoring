@@ -1,6 +1,6 @@
 Here's the documentation converted to GitHub `README.md` markup:
 
-```markdown
+
 # YOLO Service
 
 ## Overview
